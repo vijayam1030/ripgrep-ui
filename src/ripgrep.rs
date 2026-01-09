@@ -45,7 +45,7 @@ impl RipgrepBuilder {
             file_types: Vec::new(),
             glob: Vec::new(),
             max_depth: None,
-            max_results: Some(1000),
+            max_results: Some(10000), // Increased for better performance with limits
             additional_args: Vec::new(),
         }
     }
@@ -183,6 +183,10 @@ impl RipgrepBuilder {
         
         // JSON output for parsing
         cmd.arg("--json");
+        
+        // Performance optimizations
+        cmd.arg("--threads").arg("4"); // Limit threads to reduce CPU usage
+        cmd.arg("--max-filesize").arg("10M"); // Skip very large files
         
         // Case sensitivity
         if self.ignore_case {

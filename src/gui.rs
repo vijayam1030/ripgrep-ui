@@ -1,8 +1,9 @@
 use eframe::egui;
 use crate::config::Config;
 use crate::ripgrep::{RipgrepBuilder, SearchResult};
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}, mpsc};
 use std::thread;
+use std::time::{Duration, Instant};
 
 pub struct RipgrepApp {
     config: Config,
@@ -39,11 +40,14 @@ pub struct RipgrepApp {
     
     // Results
     results: Arc<Mutex<Vec<SearchResult>>>,
+    result_receiver: Option<mpsc::Receiver<Vec<SearchResult>>>,
     selected_result_index: Option<usize>,
     is_searching: Arc<AtomicBool>,
     search_error: Arc<Mutex<Option<String>>>,
     search_time_ms: Arc<Mutex<u64>>,
     result_count: usize,
+    max_results: usize,
+    last_ui_update: Instant,
     
     // UI state
     show_advanced_options: bool,
@@ -96,11 +100,14 @@ impl RipgrepApp {
             max_count_value: "100".to_string(),
             multiline: false,
             results: Arc::new(Mutex::new(Vec::new())),
+            result_receiver: None,
             selected_result_index: None,
             is_searching: Arc::new(AtomicBool::new(false)),
             search_error: Arc::new(Mutex::new(None)),
             search_time_ms: Arc::new(Mutex::new(0)),
             result_count: 0,
+            max_results: 10000, // Limit to prevent memory issues
+            last_ui_update: Instant::now(),
             show_advanced_options: false,
             show_preset_dialog: false,
             selected_preset: None,
@@ -121,6 +128,12 @@ impl RipgrepApp {
         self.results.lock().unwrap().clear();
         *self.search_error.lock().unwrap() = None;
         *self.search_time_ms.lock().unwrap() = 0;
+        self.selected_result_index = None;
+        self.preview_content.clear();
+        
+        // Create channel for receiving results in batches
+        let (tx, rx) = mpsc::channel();
+        self.result_receiver = Some(rx);
         
         let pattern = self.search_pattern.clone();
         let path = self.search_path.clone();
@@ -128,13 +141,16 @@ impl RipgrepApp {
         let smart_case = self.smart_case;
         let hidden = self.hidden_files;
         let file_types = self.selected_file_types.clone();
-        let results_arc = Arc::clone(&self.results);
         let error_arc = Arc::clone(&self.search_error);
         let time_arc = Arc::clone(&self.search_time_ms);
         let is_searching = Arc::clone(&self.is_searching);
+        let max_results = self.max_results;
         
         thread::spawn(move || {
-            let start = std::time::Instant::now();
+            let start = Instant::now();
+            let batch = Arc::new(Mutex::new(Vec::new()));
+            let batch_size = 50; // Send results in batches of 50
+            let mut total_count = 0;
             
             let mut builder = RipgrepBuilder::new(pattern)
                 .path(path)
@@ -146,11 +162,35 @@ impl RipgrepApp {
                 builder = builder.file_type(ft);
             }
 
-            // Use streaming to add results as they're found
+            // Use streaming with batching to reduce mutex contention
+            let is_searching_check = Arc::clone(&is_searching);
+            let batch_clone = Arc::clone(&batch);
+            let tx_clone = tx.clone();
+            
             let result = builder.execute_stream(move |search_result| {
-                let mut results = results_arc.lock().unwrap();
-                results.push(search_result);
+                // Check if search was cancelled
+                if !is_searching_check.load(Ordering::Relaxed) {
+                    return; // Stop processing if cancelled
+                }
+                
+                let mut batch = batch_clone.lock().unwrap();
+                batch.push(search_result);
+                
+                // Send batch when it reaches batch_size
+                if batch.len() >= batch_size {
+                    let _ = tx_clone.send(batch.clone());
+                    batch.clear();
+                    drop(batch); // Release lock before sleeping
+                    // Small sleep to prevent overwhelming the UI thread
+                    thread::sleep(Duration::from_millis(10));
+                }
             });
+
+            // Send remaining results
+            let final_batch = batch.lock().unwrap().clone();
+            if !final_batch.is_empty() {
+                let _ = tx.send(final_batch);
+            }
 
             match result {
                 Ok(_) => {
@@ -298,10 +338,31 @@ impl RipgrepApp {
 
 impl eframe::App for RipgrepApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Check if search is active and request repaints for spinner animation
+        // Process incoming results from channel (non-blocking)
+        if let Some(ref rx) = self.result_receiver {
+            let mut batches_processed = 0;
+            while let Ok(batch) = rx.try_recv() {
+                if let Ok(mut results) = self.results.lock() {
+                    results.extend(batch);
+                    self.result_count = results.len();
+                }
+                batches_processed += 1;
+                // Limit batches per frame to keep UI responsive
+                if batches_processed >= 5 {
+                    break;
+                }
+            }
+        }
+        
+        // Check if search is active and throttle repaints
         let is_searching = self.is_searching.load(Ordering::Relaxed);
         if is_searching {
-            ctx.request_repaint();
+            // Throttle UI updates to 30 FPS during search to reduce CPU usage
+            let now = Instant::now();
+            if now.duration_since(self.last_ui_update) >= Duration::from_millis(33) {
+                self.last_ui_update = now;
+                ctx.request_repaint_after(Duration::from_millis(33));
+            }
         } else {
             // Update result count when search completes
             if let Ok(results) = self.results.try_lock() {
@@ -484,13 +545,21 @@ impl eframe::App for RipgrepApp {
                 
                 ui.add_space(20.0);
                 
-                // Search button
+                // Search/Stop button
                 let is_searching = self.is_searching.load(Ordering::Relaxed);
-                let search_button = egui::Button::new(if is_searching { "⏳ Searching..." } else { "🔍 Search" })
-                    .min_size(egui::vec2(ui.available_width(), 40.0));
                 
-                if ui.add_enabled(!is_searching && !self.search_pattern.is_empty(), search_button).clicked() {
-                    self.execute_search();
+                if is_searching {
+                    let stop_button = egui::Button::new("⏹ Stop Search")
+                        .min_size(egui::vec2(ui.available_width(), 40.0));
+                    if ui.add(stop_button).clicked() {
+                        self.is_searching.store(false, Ordering::Relaxed);
+                    }
+                } else {
+                    let search_button = egui::Button::new("🔍 Search")
+                        .min_size(egui::vec2(ui.available_width(), 40.0));
+                    if ui.add_enabled(!self.search_pattern.is_empty(), search_button).clicked() {
+                        self.execute_search();
+                    }
                 }
                 
                 ui.add_space(10.0);
@@ -501,7 +570,12 @@ impl eframe::App for RipgrepApp {
                 
                 if is_searching {
                     ui.spinner();
-                    ui.label("Searching...");
+                    ui.horizontal(|ui| {
+                        ui.label("Searching...");
+                        if self.result_count > 0 {
+                            ui.label(format!("({} found so far)", self.result_count));
+                        }
+                    });
                 } else if let Some(error) = search_error {
                     ui.colored_label(egui::Color32::RED, format!("❌ Error: {}", error));
                 } else if self.result_count > 0 {
@@ -518,13 +592,26 @@ impl eframe::App for RipgrepApp {
 
         // Main content area
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("📊 Search Results");
+            ui.horizontal(|ui| {
+                ui.heading("📊 Search Results");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if self.result_count >= self.max_results {
+                        ui.colored_label(
+                            egui::Color32::YELLOW,
+                            format!("⚠ Showing first {} results (limit reached)", self.max_results)
+                        );
+                    } else {
+                        ui.label(format!("Showing {} results", self.result_count));
+                    }
+                });
+            });
             ui.separator();
             
-            // Results table
+            // Results table with optimized rendering
             use egui_extras::{Column, TableBuilder};
             
-            let results = self.results.lock().unwrap().clone();
+            // Don't clone entire result set - just get count and render visible rows
+            let result_count = self.result_count;
             
             TableBuilder::new(ui)
                 .striped(true)
@@ -544,9 +631,18 @@ impl eframe::App for RipgrepApp {
                         ui.strong("Actions");
                     });
                 })
-                .body(|mut body| {
-                    for (idx, result) in results.iter().enumerate() {
-                        body.row(25.0, |mut row| {
+                .body(|body| {
+                    body.rows(25.0, result_count, |mut row| {
+                        let idx = row.index();
+                        
+                        // Only access results for visible rows - clone data to avoid borrow issues
+                        let result_data = if let Ok(results) = self.results.try_lock() {
+                            results.get(idx).cloned()
+                        } else {
+                            None
+                        };
+                        
+                        if let Some(result) = result_data {
                             row.col(|ui| {
                                 ui.label(result.line_number.to_string());
                             });
@@ -561,7 +657,7 @@ impl eframe::App for RipgrepApp {
                                     self.preview_file_path = Some(result.path.clone());
                                     self.preview_line_number = result.line_number;
                                     
-                                    // Update preview based on mode
+                                    // Update preview based on mode (lazy loading)
                                     if self.preview_mode == PreviewMode::SingleLine {
                                         self.preview_content = format!(
                                             "File: {}\nLine: {}\n\n{}",
@@ -570,7 +666,7 @@ impl eframe::App for RipgrepApp {
                                             result.line_content
                                         );
                                     } else {
-                                        // Load whole file
+                                        // Load whole file only when selected
                                         self.load_whole_file_preview();
                                     }
                                 }
@@ -595,8 +691,8 @@ impl eframe::App for RipgrepApp {
                                     Self::open_folder_location(&result.path);
                                 }
                             });
-                        });
-                    }
+                        }
+                    });
                 });
             
             ui.add_space(10.0);
