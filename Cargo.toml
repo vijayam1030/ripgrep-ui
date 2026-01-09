@@ -7,11 +7,12 @@ description = "A user-friendly TUI wrapper for ripgrep with enhanced discoverabi
 license = "MIT"
 
 [dependencies]
-# TUI framework
-ratatui = "0.26"
-crossterm = "0.27"
+# GUI framework
+eframe = "0.27"
+egui = "0.27"
+egui_extras = { version = "0.27", features = ["file", "image"] }
 
-# CLI argument parsing
+# CLI argument parsing (for optional CLI mode)
 clap = { version = "4.5", features = ["derive", "cargo"] }
 
 # Process execution
@@ -30,6 +31,7 @@ thiserror = "1.0"
 chrono = "0.4"
 dirs = "5.0"
 regex = "1.10"
+env_logger = "0.11"
 
 [profile.release]
 opt-level = 3

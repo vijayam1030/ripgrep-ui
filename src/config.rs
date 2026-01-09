@@ -123,7 +123,7 @@ impl Config {
         Ok(config_dir.join("ripgrep-tui").join("config.toml"))
     }
 
-    fn default_config() -> Self {
+    pub fn default_config() -> Self {
         let mut presets = HashMap::new();
         
         // Add some useful default presets
