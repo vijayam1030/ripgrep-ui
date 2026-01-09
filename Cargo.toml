@@ -1,0 +1,38 @@
+[package]
+name = "ripgrep-tui"
+version = "0.1.0"
+edition = "2021"
+authors = ["Your Name <your.email@example.com>"]
+description = "A user-friendly TUI wrapper for ripgrep with enhanced discoverability"
+license = "MIT"
+
+[dependencies]
+# TUI framework
+ratatui = "0.26"
+crossterm = "0.27"
+
+# CLI argument parsing
+clap = { version = "4.5", features = ["derive", "cargo"] }
+
+# Process execution
+tokio = { version = "1.35", features = ["full"] }
+
+# Serialization for config
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Utilities
+chrono = "0.4"
+dirs = "5.0"
+regex = "1.10"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
