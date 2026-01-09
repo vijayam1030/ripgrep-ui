@@ -52,19 +52,24 @@ fn render_main(f: &mut Frame, app: &AppState) {
 
 fn render_header(f: &mut Frame, area: Rect, _app: &AppState) {
     let title = vec![
-        Span::styled("Ripgrep TUI", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Span::raw(" - Fast Search with Easy UI"),
+        Span::styled("⚡ ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled("Ripgrep", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+        Span::styled(" TUI", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(" ⚡", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::raw("  "),
+        Span::styled("Fast Search with Style", Style::default().fg(Color::Green).add_modifier(Modifier::ITALIC)),
     ];
 
     let subtitle = if let Ok(version) = crate::ripgrep::get_ripgrep_version() {
-        format!(" {} ", version)
+        format!(" 🔍 {} ", version)
     } else {
-        " ripgrep ".to_string()
+        " 🔍 ripgrep ".to_string()
     };
 
     let header = Paragraph::new(Line::from(title))
         .block(Block::default()
             .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Magenta))
             .title(subtitle))
         .alignment(Alignment::Center);
 
@@ -75,28 +80,30 @@ fn render_search_input(f: &mut Frame, area: Rect, app: &AppState) {
     let is_focused = app.focus == Focus::SearchInput || app.mode == Mode::Search;
     
     let border_style = if is_focused {
-        Style::default().fg(Color::Yellow)
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::White)
+        Style::default().fg(Color::Cyan)
     };
 
     let input_text = if app.search_input.is_empty() {
-        Span::styled("Type pattern to search...", Style::default().fg(Color::DarkGray))
+        Span::styled("✨ Type pattern to search...", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))
     } else {
-        Span::raw(&app.search_input)
+        Span::styled(&app.search_input, Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
     };
 
-    let mut title = vec![Span::raw("Search ")];
+    let mut title = vec![
+        Span::styled("🔍 Search ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+    ];
     
     if !app.file_types.is_empty() {
         title.push(Span::styled(
-            format!("[{}] ", app.file_types.join(", ")),
-            Style::default().fg(Color::Green),
+            format!("📁[{}] ", app.file_types.join(", ")),
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
         ));
     }
     
     if app.ignore_case {
-        title.push(Span::styled("[i] ", Style::default().fg(Color::Magenta)));
+        title.push(Span::styled("[Aa] ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)));
     }
 
     let input = Paragraph::new(input_text)
@@ -117,12 +124,12 @@ fn render_results(f: &mut Frame, area: Rect, app: &AppState) {
     let is_focused = app.focus == Focus::Results;
     
     let border_style = if is_focused {
-        Style::default().fg(Color::Yellow)
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::White)
+        Style::default().fg(Color::Green)
     };
 
-    let title = format!("Results ({}) ", app.results.len());
+    let title = format!("📋 Results ({}) ", app.results.len());
 
     let items: Vec<ListItem> = app.results
         .iter()
@@ -140,16 +147,17 @@ fn render_results(f: &mut Frame, area: Rect, app: &AppState) {
             let line = vec![
                 Span::styled(
                     format!("{:>4} ", result.line_number),
-                    Style::default().fg(Color::Blue),
+                    Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
                 ),
+                Span::styled("│ ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     short_path.clone(),
-                    Style::default().fg(Color::Green),
+                    Style::default().fg(Color::Cyan),
                 ),
             ];
 
             let style = if is_selected {
-                Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+                Style::default().bg(Color::Blue).fg(Color::White).add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
@@ -163,7 +171,7 @@ fn render_results(f: &mut Frame, area: Rect, app: &AppState) {
             .borders(Borders::ALL)
             .title(title)
             .border_style(border_style))
-        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD));
+        .highlight_style(Style::default().bg(Color::Blue).fg(Color::White).add_modifier(Modifier::BOLD));
 
     let mut list_state = ListState::default();
     list_state.select(Some(app.selected_result));
@@ -175,18 +183,18 @@ fn render_preview(f: &mut Frame, area: Rect, app: &AppState) {
     let is_focused = app.focus == Focus::Preview;
     
     let border_style = if is_focused {
-        Style::default().fg(Color::Yellow)
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::White)
+        Style::default().fg(Color::Magenta)
     };
 
     let content = if let Some(result) = app.results.get(app.selected_result) {
         let mut lines = vec![
             Line::from(vec![
-                Span::styled("File: ", Style::default().fg(Color::Gray)),
+                Span::styled("📄 File: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
                 Span::styled(
                     result.path.display().to_string(),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
                 ),
             ]),
             Line::from(""),
@@ -205,7 +213,7 @@ fn render_preview(f: &mut Frame, area: Rect, app: &AppState) {
             // Add highlighted match
             spans.push(Span::styled(
                 &line_content[m.start..m.end],
-                Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             ));
             last_pos = m.end;
         }
@@ -225,7 +233,7 @@ fn render_preview(f: &mut Frame, area: Rect, app: &AppState) {
     let preview = Paragraph::new(content)
         .block(Block::default()
             .borders(Borders::ALL)
-            .title("Preview ")
+            .title("👁️  Preview ")
             .border_style(border_style))
         .wrap(Wrap { trim: false });
 
@@ -234,17 +242,27 @@ fn render_preview(f: &mut Frame, area: Rect, app: &AppState) {
 
 fn render_status_bar(f: &mut Frame, area: Rect, app: &AppState) {
     let help_text = match app.mode {
-        Mode::Normal => "i//:search | ?:help | p:presets | j/k:navigate | Enter:open | q:quit",
-        Mode::Search => "Type to search | Enter:execute | Esc:cancel | Ctrl+U:clear",
-        Mode::Help => "j/k:scroll | ?/Esc:close",
-        Mode::PresetMenu => "j/k:navigate | Enter:select | Esc:cancel",
+        Mode::Normal => "⌨️  i//:search | ?:help | p:presets | j/k:navigate | Enter:open | q:quit",
+        Mode::Search => "✏️  Type to search | Enter:execute | Esc:cancel | Ctrl+U:clear",
+        Mode::Help => "📖 j/k:scroll | ?/Esc:close",
+        Mode::PresetMenu => "📑 j/k:navigate | Enter:select | Esc:cancel",
+    };
+
+    let status_style = if app.results.is_empty() && !app.search_input.is_empty() {
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+    } else if !app.results.is_empty() {
+        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Cyan)
     };
 
     let status = Paragraph::new(vec![
-        Line::from(Span::raw(&app.status_message)),
-        Line::from(Span::styled(help_text, Style::default().fg(Color::DarkGray))),
+        Line::from(Span::styled(&app.status_message, status_style)),
+        Line::from(Span::styled(help_text, Style::default().fg(Color::Yellow))),
     ])
-    .block(Block::default().borders(Borders::ALL));
+    .block(Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Magenta)));
 
     f.render_widget(status, area);
 }
@@ -253,40 +271,77 @@ fn render_help(f: &mut Frame, app: &AppState) {
     let area = centered_rect(80, 80, f.size());
 
     let help_text = vec![
-        Line::from(Span::styled("Ripgrep TUI - Help", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
+        Line::from(vec![
+            Span::styled("⚡ ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("Ripgrep TUI ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+            Span::styled("- Help Guide", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        ]),
         Line::from(""),
-        Line::from(Span::styled("Navigation:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-        Line::from("  i, /           Enter search mode"),
-        Line::from("  j, Down        Move down in results"),
-        Line::from("  k, Up          Move up in results"),
-        Line::from("  Tab            Switch focus between panels"),
-        Line::from("  Enter          Open selected result"),
-        Line::from("  q              Quit application"),
+        Line::from(Span::styled("🎯 Navigation:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from(vec![
+            Span::styled("  i, /", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw("           Enter search mode"),
+        ]),
+        Line::from(vec![
+            Span::styled("  j, Down", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw("        Move down in results"),
+        ]),
+        Line::from(vec![
+            Span::styled("  k, Up", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw("          Move up in results"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Tab", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw("            Switch focus between panels"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Enter", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw("          Open selected result"),
+        ]),
+        Line::from(vec![
+            Span::styled("  q", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::raw("              Quit application"),
+        ]),
         Line::from(""),
-        Line::from(Span::styled("Search Options:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-        Line::from("  p              Open preset menu"),
-        Line::from("  Ctrl+U         Clear search input"),
+        Line::from(Span::styled("🔍 Search Options:", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
+        Line::from(vec![
+            Span::styled("  p", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+            Span::raw("              Open preset menu"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ctrl+U", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+            Span::raw("         Clear search input"),
+        ]),
         Line::from(""),
-        Line::from(Span::styled("Presets:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-        Line::from("  rust           Search in Rust files only"),
-        Line::from("  code           Search in common code files"),
-        Line::from("  docs           Search in documentation files"),
+        Line::from(Span::styled("📦 Presets:", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
+        Line::from(vec![
+            Span::styled("  rust", Style::default().fg(Color::Cyan)),
+            Span::raw("           Search in Rust files only"),
+        ]),
+        Line::from(vec![
+            Span::styled("  code", Style::default().fg(Color::Cyan)),
+            Span::raw("           Search in common code files"),
+        ]),
+        Line::from(vec![
+            Span::styled("  docs", Style::default().fg(Color::Cyan)),
+            Span::raw("           Search in documentation files"),
+        ]),
         Line::from(""),
-        Line::from(Span::styled("Features:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-        Line::from("  • Real-time search as you type"),
-        Line::from("  • Syntax-highlighted results"),
-        Line::from("  • File preview panel"),
-        Line::from("  • Customizable presets"),
-        Line::from("  • Fast ripgrep backend"),
+        Line::from(Span::styled("✨ Features:", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))),
+        Line::from(vec![Span::styled("  ⚡ ", Style::default().fg(Color::Yellow)), Span::raw("Real-time search as you type")]),
+        Line::from(vec![Span::styled("  🎨 ", Style::default().fg(Color::Yellow)), Span::raw("Colorful syntax-highlighted results")]),
+        Line::from(vec![Span::styled("  👁️  ", Style::default().fg(Color::Yellow)), Span::raw("File preview panel")]),
+        Line::from(vec![Span::styled("  ⚙️  ", Style::default().fg(Color::Yellow)), Span::raw("Customizable presets")]),
+        Line::from(vec![Span::styled("  🚀 ", Style::default().fg(Color::Yellow)), Span::raw("Fast ripgrep backend")]),
         Line::from(""),
-        Line::from(Span::styled("Press '?' or Esc to close this help", Style::default().fg(Color::Green))),
+        Line::from(Span::styled("💡 Press '?' or Esc to close this help", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
     ];
 
     let help = Paragraph::new(help_text)
         .block(Block::default()
             .borders(Borders::ALL)
-            .title(" Help ")
-            .border_style(Style::default().fg(Color::Cyan)))
+            .title(" 📚 Help ")
+            .border_style(Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)))
         .wrap(Wrap { trim: false })
         .scroll((app.help_scroll as u16, 0));
 
@@ -307,14 +362,22 @@ fn render_preset_menu(f: &mut Frame, app: &AppState) {
                 .map(|p| p.description.as_str())
                 .unwrap_or("");
 
+            let icon = match name.as_str() {
+                "rust" => "🦀 ",
+                "code" => "💻 ",
+                "docs" => "📝 ",
+                _ => "📦 ",
+            };
+
             let line = Line::from(vec![
+                Span::raw(icon),
                 Span::styled(name.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                Span::raw(" - "),
-                Span::raw(description.to_string()),
+                Span::styled(" → ", Style::default().fg(Color::DarkGray)),
+                Span::styled(description.to_string(), Style::default().fg(Color::Green)),
             ]);
 
             let style = if is_selected {
-                Style::default().bg(Color::DarkGray)
+                Style::default().bg(Color::Blue).fg(Color::White).add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
@@ -326,8 +389,9 @@ fn render_preset_menu(f: &mut Frame, app: &AppState) {
     let list = List::new(items)
         .block(Block::default()
             .borders(Borders::ALL)
-            .title(" Select Preset ")
-            .border_style(Style::default().fg(Color::Cyan)));
+            .title(" 🎨 Select Preset ")
+            .border_style(Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)))
+        .highlight_style(Style::default().bg(Color::Blue).fg(Color::White).add_modifier(Modifier::BOLD));
 
     f.render_widget(list, area);
 }
