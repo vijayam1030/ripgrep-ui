@@ -173,6 +173,57 @@ impl RipgrepApp {
             }
         }
     }
+
+    fn open_file(path: &std::path::Path) {
+        #[cfg(target_os = "windows")]
+        {
+            let _ = std::process::Command::new("cmd")
+                .args(["/C", "start", "", &path.display().to_string()])
+                .spawn();
+        }
+        
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("open")
+                .arg(path)
+                .spawn();
+        }
+        
+        #[cfg(target_os = "linux")]
+        {
+            let _ = std::process::Command::new("xdg-open")
+                .arg(path)
+                .spawn();
+        }
+    }
+
+    fn open_folder_location(path: &std::path::Path) {
+        #[cfg(target_os = "windows")]
+        {
+            // Open Explorer and select the file
+            let _ = std::process::Command::new("explorer")
+                .args(["/select,", &path.display().to_string()])
+                .spawn();
+        }
+        
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(parent) = path.parent() {
+                let _ = std::process::Command::new("open")
+                    .arg(parent)
+                    .spawn();
+            }
+        }
+        
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(parent) = path.parent() {
+                let _ = std::process::Command::new("xdg-open")
+                    .arg(parent)
+                    .spawn();
+            }
+        }
+    }
 }
 
 impl eframe::App for RipgrepApp {
@@ -417,9 +468,10 @@ impl eframe::App for RipgrepApp {
                                 ui.label(result.line_number.to_string());
                             });
                             row.col(|ui| {
+                                let path_text = result.path.display().to_string();
                                 let label = ui.selectable_label(
                                     self.selected_result_index == Some(idx),
-                                    result.path.display().to_string()
+                                    path_text
                                 );
                                 if label.clicked() {
                                     self.selected_result_index = Some(idx);
@@ -439,10 +491,25 @@ impl eframe::App for RipgrepApp {
                                         self.load_whole_file_preview();
                                     }
                                 }
+                                
+                                // Context menu for folder actions
+                                label.context_menu(|ui| {
+                                    if ui.button("📂 Open Folder").clicked() {
+                                        Self::open_folder_location(&result.path);
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("📄 Open File").clicked() {
+                                        Self::open_file(&result.path);
+                                        ui.close_menu();
+                                    }
+                                });
                             });
                             row.col(|ui| {
                                 if ui.button("📂 Open").clicked() {
-                                    // TODO: Open file in editor
+                                    Self::open_file(&result.path);
+                                }
+                                if ui.button("📁 Folder").clicked() {
+                                    Self::open_folder_location(&result.path);
                                 }
                             });
                         });
@@ -481,48 +548,38 @@ impl eframe::App for RipgrepApp {
                     }
                 });
                 
-                egui::ScrollArea::both()
-                    .id_source("preview_scroll")
-                    .min_scrolled_height(200.0)
-                    .max_height(300.0)
-                    .show(ui, |ui| {
-                        if self.preview_mode == PreviewMode::WholeFile {
-                            // Display whole file with line numbers and highlighting
-                            egui::Grid::new("file_preview_grid")
-                                .num_columns(2)
-                                .spacing([10.0, 2.0])
-                                .striped(false)
-                                .show(ui, |ui| {
-                                    for (line_num, line) in self.preview_content.lines().enumerate() {
-                                        let actual_line = line_num + 1;
-                                        
-                                        // Line number
-                                        if actual_line == self.preview_line_number {
-                                            ui.colored_label(egui::Color32::YELLOW, format!("{:>4}", actual_line));
-                                        } else {
-                                            ui.colored_label(egui::Color32::DARK_GRAY, format!("{:>4}", actual_line));
-                                        }
-                                        
-                                        // Content
-                                        if actual_line == self.preview_line_number {
-                                            ui.horizontal(|ui| {
-                                                ui.colored_label(egui::Color32::YELLOW, "➤");
-                                                ui.colored_label(egui::Color32::from_rgb(255, 255, 150), line);
-                                            });
-                                        } else {
-                                            ui.label(line);
-                                        }
-                                        
-                                        ui.end_row();
+                ui.add_space(5.0);
+                
+                // Preview content
+                if self.preview_mode == PreviewMode::WholeFile {
+                    // Whole file with line numbers
+                    egui::ScrollArea::both()
+                        .id_source("preview_scroll")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.style_mut().spacing.item_spacing = egui::vec2(8.0, 1.0);
+                            
+                            for (line_num, line) in self.preview_content.lines().enumerate() {
+                                let actual_line = line_num + 1;
+                                
+                                ui.horizontal(|ui| {
+                                    ui.style_mut().spacing.item_spacing.x = 8.0;
+                                    
+                                    if actual_line == self.preview_line_number {
+                                        ui.colored_label(egui::Color32::YELLOW, format!("{:>4}", actual_line));
+                                        ui.colored_label(egui::Color32::YELLOW, "➤");
+                                        ui.colored_label(egui::Color32::from_rgb(255, 255, 150), line);
+                                    } else {
+                                        ui.colored_label(egui::Color32::DARK_GRAY, format!("{:>4}", actual_line));
+                                        ui.label(line);
                                     }
                                 });
-                        } else {
-                            // Single line mode - no columns or separators
-                            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                                ui.monospace(&self.preview_content);
-                            });
-                        }
-                    });
+                            }
+                        });
+                } else {
+                    // Single line - simple label, no scrollarea to avoid margins
+                    ui.label(&self.preview_content);
+                }
             }
         });
     }
