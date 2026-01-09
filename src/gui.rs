@@ -1,7 +1,7 @@
 use eframe::egui;
 use crate::config::Config;
 use crate::ripgrep::{RipgrepBuilder, SearchResult};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::thread;
 
 pub struct RipgrepApp {
@@ -40,9 +40,9 @@ pub struct RipgrepApp {
     // Results
     results: Arc<Mutex<Vec<SearchResult>>>,
     selected_result_index: Option<usize>,
-    is_searching: bool,
-    search_error: Option<String>,
-    search_time_ms: u64,
+    is_searching: Arc<AtomicBool>,
+    search_error: Arc<Mutex<Option<String>>>,
+    search_time_ms: Arc<Mutex<u64>>,
     result_count: usize,
     
     // UI state
@@ -97,9 +97,9 @@ impl RipgrepApp {
             multiline: false,
             results: Arc::new(Mutex::new(Vec::new())),
             selected_result_index: None,
-            is_searching: false,
-            search_error: None,
-            search_time_ms: 0,
+            is_searching: Arc::new(AtomicBool::new(false)),
+            search_error: Arc::new(Mutex::new(None)),
+            search_time_ms: Arc::new(Mutex::new(0)),
             result_count: 0,
             show_advanced_options: false,
             show_preset_dialog: false,
@@ -116,8 +116,11 @@ impl RipgrepApp {
             return;
         }
 
-        self.is_searching = true;
-        self.search_error = None;
+        self.is_searching.store(true, Ordering::Relaxed);
+        self.result_count = 0;
+        self.results.lock().unwrap().clear();
+        *self.search_error.lock().unwrap() = None;
+        *self.search_time_ms.lock().unwrap() = 0;
         
         let pattern = self.search_pattern.clone();
         let path = self.search_path.clone();
@@ -126,9 +129,12 @@ impl RipgrepApp {
         let hidden = self.hidden_files;
         let file_types = self.selected_file_types.clone();
         let results_arc = Arc::clone(&self.results);
+        let error_arc = Arc::clone(&self.search_error);
+        let time_arc = Arc::clone(&self.search_time_ms);
+        let is_searching = Arc::clone(&self.is_searching);
         
         thread::spawn(move || {
-            let _start = std::time::Instant::now();
+            let start = std::time::Instant::now();
             
             let mut builder = RipgrepBuilder::new(pattern)
                 .path(path)
@@ -140,15 +146,24 @@ impl RipgrepApp {
                 builder = builder.file_type(ft);
             }
 
-            match builder.execute() {
-                Ok(search_results) => {
-                    let mut results = results_arc.lock().unwrap();
-                    *results = search_results;
+            // Use streaming to add results as they're found
+            let result = builder.execute_stream(move |search_result| {
+                let mut results = results_arc.lock().unwrap();
+                results.push(search_result);
+            });
+
+            match result {
+                Ok(_) => {
+                    let elapsed = start.elapsed().as_millis() as u64;
+                    *time_arc.lock().unwrap() = elapsed;
                 }
                 Err(e) => {
-                    eprintln!("Search error: {}", e);
+                    *error_arc.lock().unwrap() = Some(format!("{}", e));
                 }
             }
+            
+            // Mark search as complete
+            is_searching.store(false, Ordering::Relaxed);
         });
     }
 
@@ -224,17 +239,74 @@ impl RipgrepApp {
             }
         }
     }
+
+    fn open_folder_for_path(path: &std::path::Path) {
+        let abs_path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .ok()
+                .and_then(|cwd| Some(cwd.join(path)))
+                .unwrap_or_else(|| path.to_path_buf())
+        };
+
+        #[cfg(target_os = "windows")]
+        {
+            // If it's a directory, open it directly; if it's a file, open parent
+            if abs_path.is_dir() {
+                let _ = std::process::Command::new("explorer")
+                    .arg(&abs_path.display().to_string())
+                    .spawn();
+            } else if abs_path.is_file() {
+                let _ = std::process::Command::new("explorer")
+                    .args(["/select,", &abs_path.display().to_string()])
+                    .spawn();
+            } else {
+                // Path doesn't exist yet, try to open parent or current dir
+                let parent = abs_path.parent().unwrap_or(std::path::Path::new("."));
+                let _ = std::process::Command::new("explorer")
+                    .arg(&parent.display().to_string())
+                    .spawn();
+            }
+        }
+        
+        #[cfg(target_os = "macos")]
+        {
+            let open_path = if abs_path.is_dir() {
+                abs_path
+            } else {
+                abs_path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf()
+            };
+            let _ = std::process::Command::new("open")
+                .arg(&open_path)
+                .spawn();
+        }
+        
+        #[cfg(target_os = "linux")]
+        {
+            let open_path = if abs_path.is_dir() {
+                abs_path
+            } else {
+                abs_path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf()
+            };
+            let _ = std::process::Command::new("xdg-open")
+                .arg(&open_path)
+                .spawn();
+        }
+    }
 }
 
 impl eframe::App for RipgrepApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Check if search is complete
-        if self.is_searching {
+        // Check if search is active and request repaints for spinner animation
+        let is_searching = self.is_searching.load(Ordering::Relaxed);
+        if is_searching {
+            ctx.request_repaint();
+        } else {
+            // Update result count when search completes
             if let Ok(results) = self.results.try_lock() {
                 self.result_count = results.len();
-                self.is_searching = false;
             }
-            ctx.request_repaint();
         }
 
         // Top menu bar
@@ -308,10 +380,17 @@ impl eframe::App for RipgrepApp {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.search_path)
                             .hint_text("./")
-                            .desired_width(ui.available_width() - 60.0)
+                            .desired_width(ui.available_width() - 90.0)
                     );
-                    if ui.button("📁").clicked() {
-                        // TODO: Open folder picker
+                    if ui.button("📁").on_hover_text("Browse and select folder...").clicked() {
+                        // Open folder picker dialog
+                        if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                            self.search_path = path.display().to_string();
+                        }
+                    }
+                    if ui.button("📂").on_hover_text("Open current path in Explorer").clicked() {
+                        let path = std::path::Path::new(&self.search_path);
+                        Self::open_folder_for_path(path);
                     }
                 });
                 
@@ -406,20 +485,24 @@ impl eframe::App for RipgrepApp {
                 ui.add_space(20.0);
                 
                 // Search button
-                let search_button = egui::Button::new(if self.is_searching { "⏳ Searching..." } else { "🔍 Search" })
+                let is_searching = self.is_searching.load(Ordering::Relaxed);
+                let search_button = egui::Button::new(if is_searching { "⏳ Searching..." } else { "🔍 Search" })
                     .min_size(egui::vec2(ui.available_width(), 40.0));
                 
-                if ui.add_enabled(!self.is_searching && !self.search_pattern.is_empty(), search_button).clicked() {
+                if ui.add_enabled(!is_searching && !self.search_pattern.is_empty(), search_button).clicked() {
                     self.execute_search();
                 }
                 
                 ui.add_space(10.0);
                 
                 // Status
-                if self.is_searching {
+                let search_error = self.search_error.lock().unwrap().clone();
+                let search_time = *self.search_time_ms.lock().unwrap();
+                
+                if is_searching {
                     ui.spinner();
                     ui.label("Searching...");
-                } else if let Some(error) = &self.search_error {
+                } else if let Some(error) = search_error {
                     ui.colored_label(egui::Color32::RED, format!("❌ Error: {}", error));
                 } else if self.result_count > 0 {
                     ui.colored_label(
@@ -427,7 +510,7 @@ impl eframe::App for RipgrepApp {
                         format!("✅ Found {} result{} in {}ms", 
                             self.result_count,
                             if self.result_count == 1 { "" } else { "s" },
-                            self.search_time_ms
+                            search_time
                         )
                     );
                 }

@@ -175,6 +175,119 @@ impl RipgrepBuilder {
         Ok(results)
     }
 
+    pub fn execute_stream<F>(&self, mut callback: F) -> Result<()>
+    where
+        F: FnMut(SearchResult) + Send + 'static,
+    {
+        let mut cmd = Command::new("rg");
+        
+        // JSON output for parsing
+        cmd.arg("--json");
+        
+        // Case sensitivity
+        if self.ignore_case {
+            cmd.arg("--ignore-case");
+        } else if self.smart_case {
+            cmd.arg("--smart-case");
+        }
+
+        // Hidden files
+        if self.hidden {
+            cmd.arg("--hidden");
+        }
+
+        // File types
+        for ft in &self.file_types {
+            cmd.arg("-t").arg(ft);
+        }
+
+        // Glob patterns
+        for g in &self.glob {
+            cmd.arg("-g").arg(g);
+        }
+
+        // Max depth
+        if let Some(depth) = self.max_depth {
+            cmd.arg("--max-depth").arg(depth.to_string());
+        }
+
+        // Max count (limit results per file)
+        if let Some(max) = self.max_results {
+            cmd.arg("--max-count").arg(max.to_string());
+        }
+
+        // Additional arguments
+        for arg in &self.additional_args {
+            cmd.arg(arg);
+        }
+
+        // Pattern and path
+        cmd.arg(&self.pattern);
+        cmd.arg(&self.path);
+
+        // Execute with streaming
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+
+        let mut child = cmd.spawn()
+            .context("Failed to execute ripgrep. Make sure 'rg' is installed and in PATH.")?;
+
+        if let Some(stdout) = child.stdout.take() {
+            use std::io::{BufRead, BufReader};
+            let reader = BufReader::new(stdout);
+            
+            for line in reader.lines() {
+                let line = line?;
+                if line.trim().is_empty() {
+                    continue;
+                }
+
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
+                    if value["type"] == "match" {
+                        if let Some(result) = self.parse_match(&value["data"]) {
+                            callback(result);
+                        }
+                    }
+                }
+            }
+        }
+
+        let status = child.wait()?;
+        if !status.success() && status.code() != Some(1) {
+            anyhow::bail!("Ripgrep exited with error");
+        }
+
+        Ok(())
+    }
+
+    fn parse_match(&self, data: &serde_json::Value) -> Option<SearchResult> {
+        let path = PathBuf::from(data["path"]["text"].as_str()?);
+        let line_number = data["line_number"].as_u64()? as usize;
+        let line_content = data["lines"]["text"]
+            .as_str()?
+            .trim_end_matches('\n')
+            .to_string();
+
+        let mut matches = Vec::new();
+        if let Some(submatches) = data["submatches"].as_array() {
+            for submatch in submatches {
+                let start = submatch["start"].as_u64().unwrap_or(0) as usize;
+                let end = submatch["end"].as_u64().unwrap_or(0) as usize;
+                let text = submatch["match"]["text"].as_str().unwrap_or("").to_string();
+                
+                matches.push(Match { start, end, text });
+            }
+        }
+
+        Some(SearchResult {
+            path,
+            line_number,
+            column: matches.first().map(|m| m.start).unwrap_or(0),
+            line_content,
+            matches,
+        })
+    }
+
     fn parse_json_output(&self, output: &str) -> Result<Vec<SearchResult>> {
         let mut results = Vec::new();
 
